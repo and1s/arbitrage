@@ -1,7 +1,9 @@
 import json
 from math import log
 import requests
-
+import networkx as nx
+import matplotlib.pyplot as plt
+#example rates
 rates = [
     [1, 0.23, 0.25, 16.43, 18.21, 4.94],
     [4.34, 1, 1.11, 71.40, 79.09, 21.44],
@@ -10,7 +12,7 @@ rates = [
     [0.055, 0.013, 0.014, 0.90, 1, 0.27],
     [0.20, 0.047, 0.052, 3.33, 3.69, 1],
 ]
-
+#example currencies
 currencies = ('PLN', 'EUR', 'USD', 'RUB', 'INR', 'MXN')
 
 
@@ -19,13 +21,9 @@ def negate_logarithm_convertor(graph):
     result = [[-log(edge) for edge in row] for row in graph]
     return result
 
-
 def arbitrage(currency_tuple, rates_matrix):
-    ''' Calculates arbitrage situations and prints out the details of this calculations'''
 
     trans_graph = negate_logarithm_convertor(rates_matrix)
-
-    # Pick any source vertex -- we can run Bellman-Ford from any vertex and get the right result
 
     source = 0
     n = len(trans_graph)
@@ -35,31 +33,33 @@ def arbitrage(currency_tuple, rates_matrix):
     
     min_dist[source] = source
 
-    # 'Relax edges |V-1| times'
     for _ in range(n-1):
         for source_curr in range(n):
             for dest_curr in range(n):
                 if min_dist[dest_curr] > min_dist[source_curr] + trans_graph[source_curr][dest_curr]:
                     min_dist[dest_curr] = min_dist[source_curr] + trans_graph[source_curr][dest_curr]
                     pre[dest_curr] = source_curr
+    cycleDict = {}
+    cycleList = []
 
-    # if we can still relax edges, then we have a negative cycle
     for source_curr in range(n):
         for dest_curr in range(n):
             if min_dist[dest_curr] > min_dist[source_curr] + trans_graph[source_curr][dest_curr]:
-                # negative cycle exists, and use the predecessor chain to print the cycle
                 print_cycle = [dest_curr, source_curr]
-                # Start from the source and go backwards until you see the source vertex again or any vertex that already exists in print_cycle array
                 while pre[source_curr] not in  print_cycle:
                     print_cycle.append(pre[source_curr])
                     source_curr = pre[source_curr]
                 print_cycle.append(pre[source_curr])
-                print(print_cycle)
-                if len(print_cycle) == 0:
-                    print("No Arbitrage")
+                print_cycle = findLoop(print_cycle)
+                if print_cycle in cycleDict:
+                    pass
                 else:
+                    cycleDict[print_cycle] = 1
+                    cycleList.append(print_cycle)
+                    print("\n")
                     print("Arbitrage Opportunity: \n")
                     print(" --> ".join([currency_tuple[p] for p in print_cycle[::-1]]))
+    return cycleList
 
 def currentRates():
     r = requests.get("https://api.exchangeratesapi.io/latest").json()
@@ -72,17 +72,52 @@ def currentRates():
         currencyList.append(curr)
     currencyList.append(baseCurrency)
 
-    #TODO: change so that we use different base for currencies in https request
     exchangeMatrix = []
     for curr in currencyList:
         temp = []
+        myDict = requests.get('https://api.exchangeratesapi.io/latest?base='+curr).json()['rates']
         for curr2 in currencyList:
-            temp.append((ratesDict[curr2]/ratesDict[curr]))
+            if curr2 == "EUR" and curr == "EUR":
+                temp.append(1.0)
+            else:
+                temp.append(myDict[curr2])
+            #temp.append((ratesDict[curr2]/ratesDict[curr]))
         exchangeMatrix.append(temp)
     
     return currencyList, exchangeMatrix
 
+def graphMaker(currencies, rates_matrix, cycle):
+    DG = nx.DiGraph()
+    edgeList = []
+    for curr1 in range(len(cycle)-1):
+        edgeList.append((currencies[cycle[curr1]], currencies[cycle[curr1+1]], round(rates_matrix[cycle[curr1]][cycle[curr1+1]], 2)))
+    for node in currencies:
+        DG.add_node(node)
+    DG.add_weighted_edges_from(edgeList)
+    pos = nx.circular_layout(DG)
+    nx.draw_networkx(DG, pos, with_labels = True)
+    labels = nx.get_edge_attributes(DG,'weight')
+    nx.draw_networkx_edge_labels(DG, pos, edge_labels = labels)
+    plt.show()
+
+def findLoop(myList):
+    listDict = {}
+    repeat = None
+    for item in myList:
+        if item in listDict:
+            repeat = item
+            first = [i for i, n in enumerate(myList) if n == repeat][0]
+            second = [i for i, n in enumerate(myList) if n == repeat][1]
+            break
+        else:
+            listDict[item] = 1
+    if second == len(myList)-1:
+        return tuple(myList[first:])
+    else:
+        return tuple(myList[first:second+1])
 
 if __name__ == "__main__":
     currency_tuple, rates_matrix = currentRates()
-    arbitrage(currency_tuple, rates_matrix)
+    cycles = arbitrage(currencies, rates)
+    for cycle in cycles:
+        graphMaker(currency_tuple, rates_matrix, cycle)
